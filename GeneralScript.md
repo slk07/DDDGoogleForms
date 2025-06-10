@@ -3,130 +3,121 @@ function createGoogleFormWithQuizFromSheet() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
   var data = sheet.getDataRange().getValues();
   var headers = data[0];
-  function col(name) { return headers.indexOf(name); }
+  function col(name) { return headers.findIndex(h => h.trim().toLowerCase() === name.trim().toLowerCase()); }
 
-  // กำหนดชื่อฟอร์มจากบรรทัดแรกที่ไม่ใช่ header
-  var formTitle = data[1][col('Question')] || 'New Quiz Form';
+  // ฟอร์มจะชื่อ 'ไม่มีหัวข้อกำหนด' ถ้า cell ว่าง
+  var formTitle = (data[1][col('Question')] && String(data[1][col('Question')]).trim()) ? data[1][col('Question')] : 'ไม่มีหัวข้อกำหนด';
   var form = FormApp.create(formTitle);
-
-  // เปิดเป็น Quiz
   form.setIsQuiz(true);
 
   for (var i = 1; i < data.length; i++) {
     var row = data[i];
-    if (!row[col('Type')] || !row[col('Question')]) continue;
+    if (!row[col('Type')]) continue; // ไม่สน row ว่าง
 
-    var type = (row[col('Type')] || '').trim();
+    var type = String(row[col('Type')]).trim().toLowerCase();
     var question = row[col('Question')] || '';
     var desc = row[col('Desc')] || '';
-    var img = row[col('Image')] || '';
-    var required = String(row[col('Required')]).toUpperCase() === "TRUE";
-    var other = String(row[col('Other')]).toUpperCase() === "TRUE";
-    var points = parseInt(row[col('Points')], 10) || 0;
+    var required = true; // กำหนด default เป็น required ทั้งหมด (ถ้าอยากกำหนดเพิ่มใน sheet ค่อยปรับเพิ่ม)
     var correctAns = row[col('Correct Answer')] || '';
-    var correctFb = row[col('correct feedback')] || '';
-    var correctUrl = row[col('correct url')] || '';
-    var incorrectFb = row[col('incorrect feedback')] || '';
-    var incorrectUrl = row[col('incorrect url')] || '';
-
-    var item = null; // ใช้สำหรับ quiz item
+    var item = null;
+    var choices = [];
 
     switch(type) {
-      case 'Title':
-        form.addTitleItem().setTitle(question);
+      case 'title':
+        form.addTitleItem().setTitle(question || 'ไม่มีหัวข้อกำหนด');
         break;
-      case 'Title and description':
-        form.addTitleItem().setTitle(question).setHelpText(desc || "");
+
+      case 'title and description':
+        form.addSectionHeaderItem().setTitle(question || 'ไม่มีหัวข้อกำหนด').setHelpText(desc || "");
         break;
-      case 'Section':
-        form.addSectionHeaderItem().setTitle(question).setHelpText(desc || "");
+
+      case 'section':
+        form.addPageBreakItem().setTitle(question || '').setHelpText(desc || "");
         break;
-      case 'Short answer':
+
+      case 'video':
+        // ใช้ column video แทน image
+        var videoUrl = row[col('video')];
+        if (videoUrl && /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(videoUrl)) {
+          try {
+            form.addVideoItem()
+              .setVideoUrl(videoUrl)
+              .setTitle(question || '')
+              .setHelpText(desc || "");
+          } catch (e) {
+            Logger.log('Error adding video: ' + videoUrl + ', ' + e);
+          }
+        } else {
+          Logger.log('Invalid or missing YouTube video URL for: ' + question);
+        }
+        break;
+
+      case 'short answer':
         item = form.addTextItem().setTitle(question);
         if (desc) item.setHelpText(desc);
         item.setRequired(required);
         break;
-      case 'Paragraph':
+
+      case 'paragraph':
         item = form.addParagraphTextItem().setTitle(question);
         if (desc) item.setHelpText(desc);
         item.setRequired(required);
         break;
-      case 'Multiple choice':
-      case 'Checkboxes':
-      case 'Dropdown':
-        // Collect options (option start, option 2, ..., option end)
-        var choices = [];
-        for (let j = col('option start'); j <= col('option end'); j++) {
-          if (row[j]) choices.push(row[j]);
-        }
-        // เพิ่ม Other ถ้าต้องการ (เฉพาะ multiple choice/checkboxes)
-        if (other && (type === 'Multiple choice' || type === 'Checkboxes')) choices.push('Other');
 
-        // Add item
-        if (type === 'Multiple choice') {
+      case 'multiple choice':
+      case 'checkboxes':
+      case 'dropdown':
+        var startOpt = col('option start');
+        var endOpt = col('option end');
+        for (let j = startOpt; j <= endOpt; j++) {
+          if (row[j]) choices.push(String(row[j]));
+        }
+        if (type === 'multiple choice') {
           item = form.addMultipleChoiceItem().setTitle(question).setRequired(required);
-        } else if (type === 'Checkboxes') {
-          item = form.addCheckboxItem().setTitle(question).setRequired(required);
-        } else if (type === 'Dropdown') {
-          item = form.addListItem().setTitle(question).setRequired(required);
-        }
-
-        if (desc) item.setHelpText(desc);
-
-        // Choices สำหรับแต่ละ type
-        if (type === 'Multiple choice' || type === 'Checkboxes') {
           item.setChoices(choices.map(opt => item.createChoice(opt)));
-        } else if (type === 'Dropdown') {
+        } else if (type === 'checkboxes') {
+          item = form.addCheckboxItem().setTitle(question).setRequired(required);
+          item.setChoices(choices.map(opt => item.createChoice(opt)));
+        } else if (type === 'dropdown') {
+          item = form.addListItem().setTitle(question).setRequired(required);
           item.setChoiceValues(choices);
         }
-
-        // Quiz Logic
-        if (points > 0 || correctAns) {
-          // Set points
-          item.setPoints(points);
-
-          // Correct answer(s)
-          if (type === 'Checkboxes') {
-            // กรณี Checkbox เฉลยอาจคั่นด้วย comma หรือ | เช่น "Red,Blue"
-            var correctSet = correctAns.split(/,|\|/).map(s => s.trim());
-            item.setCorrectAnswer(correctSet);
-          } else {
-            // Multiple choice/Dropdown เฉลย 1 ตัว
-            item.setCorrectAnswer(correctAns);
+        // Quiz Logic: set correct answer ถ้ามี
+        try {
+          if (item && choices.length > 0 && correctAns) {
+            if (type === 'checkboxes') {
+              var correctSet = correctAns.split(/,|\|/).map(s => s.trim()).filter(Boolean);
+              correctSet = correctSet.filter(c => choices.includes(c));
+              if (correctSet.length > 0) item.setCorrectAnswer(correctSet);
+            } else {
+              if (choices.includes(correctAns)) item.setCorrectAnswer(correctAns);
+            }
           }
-
-          // Feedback
-          var fbCorrect = FormApp.createFeedback().setText(correctFb || '');
-          if (correctUrl) fbCorrect.addLink(correctUrl, 'เพิ่มเติม');
-
-          var fbIncorrect = FormApp.createFeedback().setText(incorrectFb || '');
-          if (incorrectUrl) fbIncorrect.addLink(incorrectUrl, 'เพิ่มเติม');
-
-          item.setFeedbackForCorrect(fbCorrect);
-          item.setFeedbackForIncorrect(fbIncorrect);
+        } catch (e) {
+          Logger.log('Quiz/Points error at row ' + (i + 1) + ': ' + e);
         }
         break;
-      case 'Date':
+
+      case 'date':
         item = form.addDateItem().setTitle(question).setRequired(required);
         if (desc) item.setHelpText(desc);
         break;
-      case 'Time':
+
+      case 'time':
         item = form.addTimeItem().setTitle(question).setRequired(required);
         if (desc) item.setHelpText(desc);
         break;
-      case 'Date and time':
+
+      case 'date and time':
         item = form.addDateTimeItem().setTitle(question).setRequired(required);
         if (desc) item.setHelpText(desc);
         break;
-      case 'Linear scale':
-        // เพิ่ม logic กำหนด scale (อาจเพิ่ม column ใน sheet เพื่อกำหนด min/max label)
-        item = form.addScaleItem()
-          .setTitle(question)
-          .setBounds(1, 5);
+
+      case 'linear scale':
+        item = form.addScaleItem().setTitle(question).setBounds(1, 5).setRequired(required);
         if (desc) item.setHelpText(desc);
-        item.setRequired(required);
         break;
-      // Image & Grid types ยังไม่รองรับใน script นี้เพราะข้อจำกัด API/ความซับซ้อน
+
       default:
         Logger.log('Unknown/unsupported type: ' + type + ' for question: ' + question);
     }
