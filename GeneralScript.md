@@ -75,7 +75,7 @@ function createFormFromSheet() {
   });
 }
 ```
-# ผล
+# ผลที่ได้
 https://docs.google.com/forms/d/1-B7B9tpe31-P4ZRs6-nIMHXRuKUcC4uVgt8dvApDK78/edit
 # 2
 ```
